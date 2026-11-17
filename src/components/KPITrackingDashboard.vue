@@ -1,18 +1,22 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import {
   AlertTriangle,
   ArrowRight,
   BarChart3,
+  CalendarDays,
   CheckCircle2,
   ChevronRight,
   Compass,
   Eye,
   FileCheck2,
   FileText,
+  Filter,
   Info,
+  Loader2,
   Lock,
   Printer,
+  RefreshCw,
   Scale,
   Shield,
   ShieldCheck,
@@ -20,6 +24,36 @@ import {
   X,
 } from 'lucide-vue-next'
 import Button from './ui/Button.vue'
+import CustomSelect from './ui/CustomSelect.vue'
+import CooperativaVisualizations from './CooperativaVisualizations.vue'
+import { KPI_PERIODS } from '../data/cooperativaModels.js'
+
+const props = defineProps({
+  onNavigateToProjects: {
+    type: Function,
+    default: null,
+  },
+  onRefreshData: {
+    type: Function,
+    default: null,
+  },
+  lastUpdated: {
+    type: String,
+    default: '',
+  },
+  isLoading: {
+    type: Boolean,
+    default: false,
+  },
+  loadError: {
+    type: String,
+    default: '',
+  },
+  isSupabaseConnected: {
+    type: Boolean,
+    default: false,
+  },
+})
 
 const kpiList = [
   {
@@ -285,8 +319,81 @@ const audienceMatrix = [
 
 const selectedKPI = ref(null)
 const selectedAudience = ref('todos')
+const selectedPeriodId = ref('octubre_2026')
+const selectedCategory = ref('todas')
 const reportMode = ref(false)
 const activeTab = ref('tablero')
+const localTimestamp = ref(
+  new Date().toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+)
+
+const activePeriod = computed(
+  () => KPI_PERIODS.find((p) => p.id === selectedPeriodId.value) || KPI_PERIODS[0]
+)
+
+const dynamicKpiList = computed(() => {
+  const period = activePeriod.value
+  return kpiList.map((base) => {
+    const pVal = period?.values?.[base.id]
+    if (!pVal) return base
+    return {
+      ...base,
+      currentValue: pVal.value,
+      formattedValue: pVal.formatted,
+      statusLabel: pVal.statusLabel,
+      statusType: pVal.statusType,
+      calculationBreakdown: {
+        period: period.label,
+        numerator: pVal.numerator,
+        denominator: pVal.denominator,
+        detail: pVal.detail,
+        math: pVal.math,
+      },
+    }
+  })
+})
+
+const filteredKpiList = computed(() => {
+  let list = dynamicKpiList.value
+  if (selectedAudience.value === 'comunidad') {
+    list = list.filter((k) => k.id === 'IASS')
+  }
+  if (selectedCategory.value !== 'todas') {
+    list = list.filter((k) => k.categoryShort === selectedCategory.value)
+  }
+  return list
+})
+
+const kpiSummaryStats = computed(() => {
+  const list = dynamicKpiList.value
+  const calculable = list.filter((k) => k.currentValue !== null && k.currentValue !== undefined)
+  const met = calculable.filter((k) => k.statusType === 'success').length
+  const alerts = calculable.filter((k) => k.statusType === 'danger' || k.statusType === 'warning').length
+  const naCount = list.length - calculable.length
+  const pct = calculable.length > 0 ? Math.round((met / calculable.length) * 100) : 0
+  return { met, alerts, naCount, total: list.length, calculableCount: calculable.length, pct }
+})
+
+const displayTimestamp = computed(() => props.lastUpdated || localTimestamp.value)
+
+async function handleManualRefresh() {
+  if (typeof props.onRefreshData === 'function') {
+    await props.onRefreshData()
+  }
+  localTimestamp.value = new Date().toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 function handlePrint() {
   window.print()
@@ -311,24 +418,70 @@ function handlePrint() {
 
         <div class="kpi-hero-actions">
           <div class="kpi-audience-selector">
-            <label for="audience-select">
-              <Eye :size="15" />
-              <span>Vista por Audiencia:</span>
+            <label>
+              <CalendarDays :size="15" />
+              <span>Período:</span>
             </label>
-            <select
-              id="audience-select"
+            <CustomSelect
+              v-model="selectedPeriodId"
+              dark
+              :options="KPI_PERIODS.map((p) => ({ value: p.id, label: p.label }))"
+              style="min-width: 195px"
+            />
+          </div>
+
+          <div class="kpi-audience-selector">
+            <label>
+              <Filter :size="15" />
+              <span>Perspectiva:</span>
+            </label>
+            <CustomSelect
+              v-model="selectedCategory"
+              dark
+              :options="[
+                { value: 'todas', label: 'Todas las perspectivas (4)' },
+                { value: 'Financiero / Recursos', label: 'Financiero / Recursos (TEUP)' },
+                { value: 'Usuarios / Comunidad', label: 'Usuarios / Comunidad (IASS)' },
+                { value: 'Procesos Internos', label: 'Procesos Internos (PDFT)' },
+                { value: 'Personas / Aprendizaje', label: 'Personas / Aprendizaje (IPEC)' },
+              ]"
+              style="min-width: 225px"
+            />
+          </div>
+
+          <div class="kpi-audience-selector">
+            <label>
+              <Eye :size="15" />
+              <span>Audiencia:</span>
+            </label>
+            <CustomSelect
               v-model="selectedAudience"
-              class="kpi-select"
-            >
-              <option value="todos">Vista General Integral (Todos los órganos)</option>
-              <option value="consejo">Consejo de Administración y Sindicatura (Total)</option>
-              <option value="comisiones">Referentes y Socios (Operativo de Equipo)</option>
-              <option value="docentes">Docentes Asesores (Consultivo Pedagógico)</option>
-              <option value="comunidad">Comunidad Escolar / Solicitantes (Público)</option>
-            </select>
+              dark
+              :options="[
+                { value: 'todos', label: 'Vista General Integral (Todos los órganos)' },
+                { value: 'consejo', label: 'Consejo de Administración y Sindicatura (Total)' },
+                { value: 'comisiones', label: 'Referentes y Socios (Operativo de Equipo)' },
+                { value: 'docentes', label: 'Docentes Asesores (Consultivo Pedagógico)' },
+                { value: 'comunidad', label: 'Comunidad Escolar / Solicitantes (Público)' },
+              ]"
+              style="min-width: 255px"
+            />
           </div>
 
           <div class="kpi-hero-buttons">
+            <Button
+              variant="outline"
+              size="sm"
+              class="kpi-btn-report"
+              :disabled="isLoading"
+              title="Actualizar datos desde el origen configurado"
+              @click="handleManualRefresh"
+            >
+              <Loader2 v-if="isLoading" :size="16" class="spin" />
+              <RefreshCw v-else :size="16" />
+              <span>{{ isLoading ? 'Actualizando...' : 'Actualizar' }}</span>
+            </Button>
+
             <Button
               :variant="reportMode ? 'default' : 'outline'"
               size="sm"
@@ -337,7 +490,7 @@ function handlePrint() {
               @click="reportMode = !reportMode"
             >
               <FileCheck2 :size="16" />
-              <span>{{ reportMode ? 'Salir de Modo Informe' : 'Modo Captura de Informe' }}</span>
+              <span>{{ reportMode ? 'Salir de Modo Informe' : 'Modo Captura' }}</span>
             </Button>
 
             <Button
@@ -352,24 +505,76 @@ function handlePrint() {
             </Button>
           </div>
         </div>
+
+        <div class="kpi-freshness-line">
+          <span>
+            <strong>Última actualización:</strong> {{ displayTimestamp }} ·
+            <strong>Origen:</strong>
+            {{ isSupabaseConnected ? 'Supabase PostgreSQL (sincronizado)' : 'Dataset de ejemplo / simulación local' }} ·
+            <strong>Criterio de refresco:</strong> Al ingresar al tablero y mediante actualización manual.
+          </span>
+        </div>
       </div>
 
       <div class="kpi-hero-stats">
         <div class="kpi-mini-stat">
           <span>PERÍODO EVALUADO</span>
-          <strong>Octubre 2026</strong>
-          <small>Simulación y prueba piloto</small>
+          <strong>{{ activePeriod.shortLabel }}</strong>
+          <small>{{ activePeriod.subtitle }}</small>
         </div>
         <div class="kpi-mini-stat">
           <span>METAS ALCANZADAS</span>
-          <strong class="text-mint">3 de 4 (75%)</strong>
-          <small>TEUP, IASS e IPEC cumplidos</small>
+          <strong class="text-mint">
+            {{
+              kpiSummaryStats.calculableCount > 0
+                ? `${kpiSummaryStats.met} de ${kpiSummaryStats.calculableCount} (${kpiSummaryStats.pct}%)`
+                : 'Sin cálculo (0 datos)'
+            }}
+          </strong>
+          <small>
+            {{
+              kpiSummaryStats.naCount > 0
+                ? `${kpiSummaryStats.naCount} sin denominador válido`
+                : 'TEUP, IASS e IPEC evaluados'
+            }}
+          </small>
         </div>
-        <div class="kpi-mini-stat highlight-danger">
+        <div :class="['kpi-mini-stat', kpiSummaryStats.alerts > 0 ? 'highlight-danger' : '']">
           <span>DESVÍOS DETECTADOS</span>
-          <strong class="text-coral">1 Crítico (PDFT)</strong>
-          <small>Plan de mejoras activado</small>
+          <strong :class="kpiSummaryStats.alerts > 0 ? 'text-coral' : 'text-mint'">
+            {{
+              kpiSummaryStats.alerts > 0
+                ? `${kpiSummaryStats.alerts} en Alerta / Crítico`
+                : kpiSummaryStats.calculableCount === 0
+                  ? 'Sin actividad'
+                  : '0 Desvíos'
+            }}
+          </strong>
+          <small>{{ kpiSummaryStats.alerts > 0 ? 'Revisar plan de mejoras' : 'Operación controlada' }}</small>
         </div>
+      </div>
+    </div>
+
+    <!-- Estados explícitos de carga, error o período sin datos -->
+    <div v-if="isLoading" class="kpi-state-banner kpi-state-loading">
+      <Loader2 :size="18" class="spin" />
+      <span>Cargando y recalculando indicadores desde Supabase...</span>
+    </div>
+
+    <div v-else-if="loadError" class="kpi-state-banner kpi-state-error">
+      <AlertTriangle :size="18" />
+      <div>
+        <strong>Error de sincronización con el servidor:</strong> {{ loadError }}.
+        Se muestran los registros locales respaldados para no interrumpir la consulta.
+      </div>
+    </div>
+
+    <div v-if="activePeriod.isEmptyTest" class="kpi-state-banner kpi-state-empty">
+      <Info :size="18" />
+      <div>
+        <strong>Período sin registros operativos (Prueba de denominador cero):</strong>
+        No hay horas de laboratorio, entregas ni casos QA cargados en este corte. Los indicadores
+        se muestran como <code>N/A</code> con su explicación textual y nunca como <code>0%</code> o <code>NaN</code>.
       </div>
     </div>
 
@@ -427,7 +632,7 @@ function handlePrint() {
     <div v-if="activeTab === 'tablero'" class="kpi-view-tablero">
       <div class="kpi-cards-grid">
         <div
-          v-for="kpi in kpiList"
+          v-for="kpi in filteredKpiList"
           :key="kpi.id"
           :class="[
             'kpi-card',
@@ -479,7 +684,10 @@ function handlePrint() {
                 <div
                   :class="['kpi-progress-fill', kpi.statusType]"
                   :style="{
-                    width: `${Math.min(100, Math.max(10, (kpi.currentValue / 100) * 100))}%`,
+                    width:
+                      kpi.currentValue === null
+                        ? '0%'
+                        : `${Math.min(100, Math.max(10, (kpi.currentValue / 100) * 100))}%`,
                   }"
                 />
               </div>
@@ -517,10 +725,10 @@ function handlePrint() {
 
           <div class="kpi-table-badges">
             <span class="badge-ok">
-              <CheckCircle2 :size="14" /> 3 Cumplidos
+              <CheckCircle2 :size="14" /> {{ kpiSummaryStats.met }} Cumplidos
             </span>
-            <span class="badge-alert">
-              <AlertTriangle :size="14" /> 1 Desvío Crítico
+            <span v-if="kpiSummaryStats.alerts > 0" class="badge-alert">
+              <AlertTriangle :size="14" /> {{ kpiSummaryStats.alerts }} Desvío
             </span>
           </div>
         </div>
@@ -540,7 +748,7 @@ function handlePrint() {
             </thead>
             <tbody>
               <tr
-                v-for="kpi in kpiList"
+                v-for="kpi in filteredKpiList"
                 :key="kpi.id"
                 :class="kpi.statusType === 'danger' ? 'row-danger-highlight' : ''"
               >
@@ -634,6 +842,13 @@ function handlePrint() {
           </div>
         </div>
       </div>
+
+      <!-- VISUALIZACIONES REUTILIZABLES INTEGRADAS EN EL TABLERO -->
+      <CooperativaVisualizations
+        :period="activePeriod"
+        :selected-audience="selectedAudience"
+        :category-filter="selectedCategory"
+      />
 
       <div class="kpi-section-audiences-preview">
         <div class="section-head-flex">

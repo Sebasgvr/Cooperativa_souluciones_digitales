@@ -49,8 +49,9 @@ CREATE TABLE public.comisiones (
 -- Cumple el principio de minimización de datos personales (Data Mining ético)
 -- =============================================================================
 CREATE TABLE public.usuarios (
-    id VARCHAR(20) PRIMARY KEY, -- Ej: 'S-01', 'D-01', 'ADM-01'
-    auth_user_id UUID UNIQUE NULL, -- Vinculación opcional con auth.users de Supabase
+    id VARCHAR(20) PRIMARY KEY, -- Ej: 'S-01', 'D-01', 'ADM-01', 'USR-...'
+    auth_user_id UUID UNIQUE NULL REFERENCES auth.users(id) ON DELETE CASCADE, -- Vinculación con auth.users (donde Supabase guarda la contraseña encriptada)
+    username VARCHAR(60) NOT NULL UNIQUE, -- Nombre de usuario único para iniciar sesión
     nombre_completo VARCHAR(120) NOT NULL,
     iniciales VARCHAR(5) NOT NULL,
     email_institucional VARCHAR(150) NOT NULL UNIQUE,
@@ -406,23 +407,23 @@ INSERT INTO public.comisiones (id, nombre, descripcion, funciones_estatutarias, 
 ('COM-06', 'Documentación y soporte', 'Conserva la memoria y acompaña cada entrega.', 'Archivo de código, manuales de usuario, plantillas de validación, actas de entrega y control de versiones (Art. 4 inc. f).', 'Camila M.', 'BookOpen', 'coral', 3, ARRAY['CM', 'ML', 'AT']);
 
 -- 2. Usuarios representativos de los 8 roles y del padrón S-01 a S-20
-INSERT INTO public.usuarios (id, nombre_completo, iniciales, email_institucional, rol, cargo_institucional, comision_id, estado_socio, asistencia_asamblea, tareas_entregadas_a_tiempo) VALUES
-('S-01', 'Martina López', 'ML', 'martina.lopez@escuela.edu.ar', 'referente_comision', 'Referente de Programación (Vocal Consejo)', 'COM-01', 'Activo', true, true),
-('S-02', 'Sofía Fernández', 'SF', 'sofia.fernandez@escuela.edu.ar', 'referente_comision', 'Referente de Diseño UI/UX (Vocal Consejo)', 'COM-02', 'Activo', true, true),
-('S-03', 'Elena Varela', 'EV', 'elena.varela@escuela.edu.ar', 'consejo_administracion', 'Secretaria del Consejo / Ref. Contenidos', 'COM-03', 'Activo', true, true),
-('S-04', 'Agustín Romero', 'AR', 'agustin.romero@escuela.edu.ar', 'referente_comision', 'Referente de Pruebas y Calidad (QA)', 'COM-04', 'Activo', true, true),
-('S-05', 'Lucía Pereyra', 'LP', 'lucia.pereyra@escuela.edu.ar', 'consejo_administracion', 'Presidenta del Consejo / Ref. Comunicación', 'COM-05', 'Activo', true, true),
-('S-06', 'Camila Méndez', 'CM', 'camila.mendez@escuela.edu.ar', 'consejo_administracion', 'Tesorera del Consejo / Ref. Documentación', 'COM-06', 'Activo', true, true),
-('S-07', 'Socio S-07 (Contenidos)', 'S7', 'socio07@escuela.edu.ar', 'socio', 'Integrante Comisión de Contenidos', 'COM-03', 'Alerta inactividad', false, false),
-('S-08', 'Julián Castro', 'JC', 'julian.castro@escuela.edu.ar', 'socio', 'Integrante Comisión de Programación', 'COM-01', 'Activo', true, true),
-('S-09', 'Nicolás Silva', 'NS', 'nicolas.silva@escuela.edu.ar', 'sindicatura', 'Síndico Escolar Titular', 'COM-02', 'Activo', true, true),
-('S-10', 'Alma Torres', 'AT', 'alma.torres@escuela.edu.ar', 'socio', 'Integrante QA y Documentación', 'COM-04', 'Activo', true, true),
-('S-14', 'Socio S-14 (Contenidos)', 'S14', 'socio14@escuela.edu.ar', 'socio', 'Integrante Comisión de Contenidos', 'COM-03', 'Alerta inactividad', false, false),
-('D-01', 'Prof. Laura Gómez (Biblioteca)', 'LG', 'biblioteca@escuela.edu.ar', 'solicitante_externo', 'Referente Biblioteca Escolar', NULL, 'Externo', false, true),
-('D-02', 'Prof. Marcos Díaz (Ciencias)', 'MD', 'ciencias@escuela.edu.ar', 'solicitante_externo', 'Docente Departamento de Ciencias', NULL, 'Externo', false, true),
-('ASE-01', 'Prof. Valeria Quiroga', 'VQ', 'asesoria.coop@escuela.edu.ar', 'docente_asesor', 'Comisión Asesora Docente', NULL, 'Externo', true, true),
-('ADM-01', 'Prof. Hernán Benítez', 'HB', 'laboratorio.tic@escuela.edu.ar', 'admin_tecnico', 'Administrador Técnico / Sala de Informática', NULL, 'Externo', true, true),
-('COM-PUB', 'Visitante Comunidad Escolar', 'CE', 'comunidad@escuela.edu.ar', 'comunidad_escolar', 'Familias y Alumnado General', NULL, 'Externo', false, true);
+INSERT INTO public.usuarios (id, username, nombre_completo, iniciales, email_institucional, rol, cargo_institucional, comision_id, estado_socio, asistencia_asamblea, tareas_entregadas_a_tiempo) VALUES
+('S-01', 'martina.lopez', 'Martina López', 'ML', 'martina.lopez@escuela.edu.ar', 'referente_comision', 'Referente de Programación (Vocal Consejo)', 'COM-01', 'Activo', true, true),
+('S-02', 'sofia.fernandez', 'Sofía Fernández', 'SF', 'sofia.fernandez@escuela.edu.ar', 'referente_comision', 'Referente de Diseño UI/UX (Vocal Consejo)', 'COM-02', 'Activo', true, true),
+('S-03', 'elena.varela', 'Elena Varela', 'EV', 'elena.varela@escuela.edu.ar', 'consejo_administracion', 'Secretaria del Consejo / Ref. Contenidos', 'COM-03', 'Activo', true, true),
+('S-04', 'agustin.romero', 'Agustín Romero', 'AR', 'agustin.romero@escuela.edu.ar', 'referente_comision', 'Referente de Pruebas y Calidad (QA)', 'COM-04', 'Activo', true, true),
+('S-05', 'lucia.pereyra', 'Lucía Pereyra', 'LP', 'lucia.pereyra@escuela.edu.ar', 'consejo_administracion', 'Presidenta del Consejo / Ref. Comunicación', 'COM-05', 'Activo', true, true),
+('S-06', 'camila.mendez', 'Camila Méndez', 'CM', 'camila.mendez@escuela.edu.ar', 'consejo_administracion', 'Tesorera del Consejo / Ref. Documentación', 'COM-06', 'Activo', true, true),
+('S-07', 'socio07', 'Socio S-07 (Contenidos)', 'S7', 'socio07@escuela.edu.ar', 'socio', 'Integrante Comisión de Contenidos', 'COM-03', 'Alerta inactividad', false, false),
+('S-08', 'julian.castro', 'Julián Castro', 'JC', 'julian.castro@escuela.edu.ar', 'socio', 'Integrante Comisión de Programación', 'COM-01', 'Activo', true, true),
+('S-09', 'nicolas.silva', 'Nicolás Silva', 'NS', 'nicolas.silva@escuela.edu.ar', 'sindicatura', 'Síndico Escolar Titular', 'COM-02', 'Activo', true, true),
+('S-10', 'alma.torres', 'Alma Torres', 'AT', 'alma.torres@escuela.edu.ar', 'socio', 'Integrante QA y Documentación', 'COM-04', 'Activo', true, true),
+('S-14', 'socio14', 'Socio S-14 (Contenidos)', 'S14', 'socio14@escuela.edu.ar', 'socio', 'Integrante Comisión de Contenidos', 'COM-03', 'Alerta inactividad', false, false),
+('D-01', 'biblioteca', 'Prof. Laura Gómez (Biblioteca)', 'LG', 'biblioteca@escuela.edu.ar', 'solicitante_externo', 'Referente Biblioteca Escolar', NULL, 'Externo', false, true),
+('D-02', 'ciencias', 'Prof. Marcos Díaz (Ciencias)', 'MD', 'ciencias@escuela.edu.ar', 'solicitante_externo', 'Docente Departamento de Ciencias', NULL, 'Externo', false, true),
+('ASE-01', 'asesoria.coop', 'Prof. Valeria Quiroga', 'VQ', 'asesoria.coop@escuela.edu.ar', 'docente_asesor', 'Comisión Asesora Docente', NULL, 'Externo', true, true),
+('ADM-01', 'laboratorio.tic', 'Prof. Hernán Benítez', 'HB', 'laboratorio.tic@escuela.edu.ar', 'admin_tecnico', 'Administrador Técnico / Sala de Informática', NULL, 'Externo', true, true),
+('COM-PUB', 'comunidad', 'Visitante Comunidad Escolar', 'CE', 'comunidad@escuela.edu.ar', 'comunidad_escolar', 'Familias y Alumnado General', NULL, 'Externo', false, true);
 
 -- 3. Solicitudes iniciales (SOL-011 a SOL-014)
 INSERT INTO public.solicitudes (id, titulo, area_solicitante, solicitante_id, tipo_solucion, descripcion, fecha_limite_requerida, prioridad, estado, evaluado_por_id, etiqueta_fecha) VALUES
@@ -476,3 +477,163 @@ INSERT INTO public.historial_cambios (entidad, registro_id, accion, estado_anter
 ('proyectos', 'PR-002', 'CAMBIO_ESTADO', 'En desarrollo', 'En pruebas', 'Pase a entorno de testing. Se registraron 8 observaciones de validación y maquetado responsivo para corregir.', 'Martina López (Ref. Programación)', 'referente_comision', NOW() - INTERVAL '3 days'),
 ('solicitudes', 'SOL-013', 'CAMBIO_ESTADO', 'Por evaluar', 'En revisión', 'El Consejo inició el análisis de factibilidad técnica junto a la Comisión de Contenidos.', 'Elena Varela (Secretaría)', 'consejo_administracion', NOW() - INTERVAL '2 days');
 
+
+
+-- =============================================================================
+-- 11. SINCRONIZACIÓN AUTOMÁTICA DE REGISTRO (auth.users -> public.usuarios)
+-- Cuando un usuario se registra desde Signup, Supabase guarda la contraseña
+-- encriptada en auth.users y este trigger crea su perfil en public.usuarios.
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.handle_new_auth_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_full_name TEXT;
+    v_username TEXT;
+    v_role TEXT;
+    v_initials TEXT;
+    v_new_id VARCHAR(20);
+BEGIN
+    v_full_name := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'full_name'), ''), split_part(NEW.email, '@', 1));
+    v_username := COALESCE(
+        NULLIF(lower(trim(NEW.raw_user_meta_data->>'username')), ''),
+        lower(split_part(NEW.email, '@', 1)) || '_' || substr(NEW.id::TEXT, 1, 4)
+    );
+    v_role := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'role_id'), ''), 'socio');
+    v_initials := upper(substr(v_full_name, 1, 2));
+    v_new_id := 'U-' || upper(substr(replace(NEW.id::TEXT, '-', ''), 1, 8));
+
+    INSERT INTO public.usuarios (
+        id,
+        auth_user_id,
+        username,
+        nombre_completo,
+        iniciales,
+        email_institucional,
+        rol,
+        estado_socio
+    ) VALUES (
+        v_new_id,
+        NEW.id,
+        v_username,
+        v_full_name,
+        v_initials,
+        lower(NEW.email),
+        v_role,
+        CASE WHEN v_role IN ('solicitante_externo', 'docente_asesor', 'admin_tecnico', 'comunidad_escolar') THEN 'Externo' ELSE 'Activo' END
+    )
+    ON CONFLICT (email_institucional) DO UPDATE SET
+        auth_user_id = EXCLUDED.auth_user_id,
+        username = COALESCE(public.usuarios.username, EXCLUDED.username),
+        nombre_completo = COALESCE(NULLIF(EXCLUDED.nombre_completo, ''), public.usuarios.nombre_completo);
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_auth_user();
+
+-- =============================================================================
+-- 12. CREACIÓN DE CUENTAS Y CONTRASEÑAS ENCRIPTADAS INICIALES EN auth.users
+-- Crea automáticamente las credenciales en Supabase Auth (contraseña inicial:
+-- 'coop2026') para todos los usuarios del padrón inicial.
+-- =============================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+
+DO $$
+DECLARE
+    u RECORD;
+    v_auth_id UUID;
+    v_must_change BOOLEAN;
+BEGIN
+    FOR u IN
+        SELECT id, username, nombre_completo, email_institucional, rol
+        FROM public.usuarios
+        WHERE auth_user_id IS NULL
+    LOOP
+        SELECT id INTO v_auth_id
+        FROM auth.users
+        WHERE lower(email) = lower(u.email_institucional)
+        LIMIT 1;
+
+        IF v_auth_id IS NULL THEN
+            v_auth_id := gen_random_uuid();
+            v_must_change := CASE
+                WHEN u.rol IN ('consejo_administracion', 'admin_tecnico') THEN FALSE
+                ELSE TRUE
+            END;
+
+            INSERT INTO auth.users (
+                instance_id,
+                id,
+                aud,
+                role,
+                email,
+                encrypted_password,
+                email_confirmed_at,
+                raw_app_meta_data,
+                raw_user_meta_data,
+                created_at,
+                updated_at,
+                confirmation_token,
+                email_change,
+                email_change_token_new,
+                recovery_token
+            ) VALUES (
+                '00000000-0000-0000-0000-000000000000',
+                v_auth_id,
+                'authenticated',
+                'authenticated',
+                lower(u.email_institucional),
+                extensions.crypt('coop2026', extensions.gen_salt('bf')),
+                NOW(),
+                '{"provider":"email","providers":["email"]}'::jsonb,
+                jsonb_build_object(
+                    'full_name', u.nombre_completo,
+                    'username', u.username,
+                    'role_id', u.rol,
+                    'must_change_password', v_must_change
+                ),
+                NOW(),
+                NOW(),
+                '',
+                '',
+                '',
+                ''
+            );
+
+            INSERT INTO auth.identities (
+                id,
+                user_id,
+                identity_data,
+                provider,
+                provider_id,
+                last_sign_in_at,
+                created_at,
+                updated_at
+            ) VALUES (
+                gen_random_uuid(),
+                v_auth_id,
+                jsonb_build_object(
+                    'sub', v_auth_id::TEXT,
+                    'email', lower(u.email_institucional)
+                ),
+                'email',
+                v_auth_id::TEXT,
+                NOW(),
+                NOW(),
+                NOW()
+            );
+        END IF;
+
+        UPDATE public.usuarios
+        SET auth_user_id = v_auth_id
+        WHERE id = u.id;
+    END LOOP;
+END $$;

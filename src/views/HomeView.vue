@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import {
   AlertTriangle,
   ArrowRight,
@@ -14,6 +14,7 @@ import {
   ClipboardList,
   Clock3,
   Code2,
+  Copy,
   Edit3,
   FileText,
   Folders,
@@ -22,11 +23,13 @@ import {
   LayoutGrid,
   List,
   Loader2,
+  LogOut,
   Menu,
   MessageCircle,
   MoreHorizontal,
   Plus,
   RotateCcw,
+  Save,
   Search,
   ShieldCheck,
   Sparkles,
@@ -36,10 +39,23 @@ import {
   XCircle,
 } from 'lucide-vue-next'
 import Button from '../components/ui/Button.vue'
+import CustomSelect from '../components/ui/CustomSelect.vue'
+import CustomDatePicker from '../components/ui/CustomDatePicker.vue'
+import AuthView from '../components/AuthView.vue'
+import UserProfileView from '../components/UserProfileView.vue'
 import KPITrackingDashboard from '../components/KPITrackingDashboard.vue'
+import FollowUpReportView from '../components/FollowUpReportView.vue'
 import ProjectGlyph from '../components/ProjectGlyph.vue'
 import {
+  canManageUserAccounts,
+  changeUserPassword,
+  getCurrentSession,
+  logoutSession,
+  onAuthChange,
+} from '../lib/auth.js'
+import {
   ROLES_COOPERATIVA,
+  COOPERATIVE_MEMBERS,
   INITIAL_REQUESTS,
   INITIAL_PROJECTS,
   INITIAL_TASKS,
@@ -54,6 +70,7 @@ import {
   updateSolicitudSupabase,
   insertProjectSupabase,
   updateProjectSupabase,
+  updateTaskSupabase,
 } from '../lib/supabase.js'
 
 const commissions = [
@@ -138,7 +155,15 @@ const nav = [
   { id: 'comisiones', label: 'Comisiones', icon: Users },
   { id: 'asamblea', label: 'Asamblea y actas', icon: HeartHandshake },
   { id: 'tablero', label: 'Tablero KPI (BSC)', icon: BarChart3 },
+  { id: 'informe', label: 'Informe mensual', icon: FileText },
 ]
+
+const visibleNav = computed(() => {
+  if (canManageUserAccounts(authUser.value?.roleId)) {
+    return [...nav, { id: 'usuarios', label: 'Usuarios y roles', icon: UserCheck }]
+  }
+  return nav
+})
 
 const titles = {
   inicio: {
@@ -173,6 +198,24 @@ const titles = {
     subtitle:
       'Monitoreo en tiempo real de los 4 KPI, metas, resultados y matriz de audiencias institucionales.',
   },
+  informe: {
+    eyebrow: 'CIERRE DE PERÍODO · DOCUMENTO ANALÍTICO',
+    title: 'Informe de Seguimiento',
+    subtitle:
+      'Explicación mensual del período, gráficos de respaldo, interpretación y acciones de mejora.',
+  },
+  perfil: {
+    eyebrow: 'MI CUENTA Y PERFIL',
+    title: 'Cuenta personal y accesos',
+    subtitle:
+      'Actualizá tu foto de perfil, tus datos y tu contraseña.',
+  },
+  usuarios: {
+    eyebrow: 'ADMINISTRACIÓN DE ACCESOS · CONSEJO / ADMIN',
+    title: 'Usuarios y roles',
+    subtitle:
+      'Creá cuentas con contraseña inicial sencilla y asigná roles en la cooperativa.',
+  },
 }
 
 function getStatusKind(value) {
@@ -188,7 +231,9 @@ function getStatusKind(value) {
 const LOCAL_STORAGE_KEY = 'cooperativa_escolar_state_v1'
 
 const view = ref('inicio')
-const currentRole = ref('consejo_administracion')
+const authReady = ref(false)
+const authUser = ref(null)
+const currentRole = ref('socio')
 const requests = ref([...INITIAL_REQUESTS])
 const projects = ref([...INITIAL_PROJECTS])
 const tasks = ref([...INITIAL_TASKS])
@@ -251,8 +296,27 @@ const qaForm = ref({
 })
 const qaError = ref('')
 
-const roleDef = computed(
-  () => ROLES_COOPERATIVA.find((r) => r.id === currentRole.value) ?? ROLES_COOPERATIVA[0]
+const roleDef = computed(() => {
+  const effectiveRoleId = authUser.value?.roleId || 'comunidad'
+  return ROLES_COOPERATIVA.find((r) => r.id === effectiveRoleId) ?? ROLES_COOPERATIVA[0]
+})
+
+const displayUserName = computed(
+  () => authUser.value?.fullName || 'Visitante (Sin sesión)'
+)
+
+const displayUserInitials = computed(
+  () => authUser.value?.initials || 'VI'
+)
+
+const showAuthModal = ref(false)
+const accountMenuOpen = ref(false)
+const forcePassForm = ref({ newPassword: '', confirmPassword: '' })
+const forcePassError = ref('')
+const savingForcePass = ref(false)
+
+const pendingRequestsCount = computed(
+  () => requests.value.filter((r) => r.status === 'Por evaluar').length
 )
 
 function showFeedback(type, message) {
@@ -266,10 +330,29 @@ function showFeedback(type, message) {
   }
 }
 
+const lastSyncTimestamp = ref(
+  new Date().toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+)
+const syncError = ref('')
+
 async function syncFromSupabaseIfConfigured() {
+  syncError.value = ''
   const cfg = getSupabaseConfig()
   if (!cfg.isConfigured) {
     isSupabaseConnected.value = false
+    lastSyncTimestamp.value = new Date().toLocaleString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
     return
   }
   isLoadingOp.value = true
@@ -277,6 +360,7 @@ async function syncFromSupabaseIfConfigured() {
   isLoadingOp.value = false
   if (data.error) {
     isSupabaseConnected.value = false
+    syncError.value = data.error
     showFeedback(
       'error',
       `Aviso de conexión Supabase: ${data.error} (Usando datos de prueba locales)`
@@ -284,7 +368,14 @@ async function syncFromSupabaseIfConfigured() {
     return
   }
   isSupabaseConnected.value = true
-  if (data.solicitudes && data.solicitudes.length > 0) requests.value = data.solicitudes
+  lastSyncTimestamp.value = new Date().toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  if (Array.isArray(data.solicitudes)) requests.value = data.solicitudes
   if (data.proyectos && data.proyectos.length > 0) projects.value = data.proyectos
   if (data.tareas && data.tareas.length > 0) tasks.value = data.tareas
   if (data.pruebasQA && data.pruebasQA.length > 0) qaTests.value = data.pruebasQA
@@ -293,7 +384,9 @@ async function syncFromSupabaseIfConfigured() {
   showFeedback('success', 'Datos sincronizados en tiempo real desde Supabase PostgreSQL.')
 }
 
-onMounted(() => {
+let stopAuthListener = null
+
+onMounted(async () => {
   try {
     const raw = window.localStorage.getItem(LOCAL_STORAGE_KEY)
     if (raw) {
@@ -304,16 +397,33 @@ onMounted(() => {
       if (Array.isArray(parsed.qaTests)) qaTests.value = parsed.qaTests
       if (Array.isArray(parsed.actas)) actas.value = parsed.actas
       if (Array.isArray(parsed.auditLogs)) auditLogs.value = parsed.auditLogs
-      if (parsed.currentRole) currentRole.value = parsed.currentRole
     }
   } catch {
     // Fallback silencioso a datos iniciales
   }
-  syncFromSupabaseIfConfigured()
+
+  const sessionUser = await getCurrentSession()
+  if (sessionUser) {
+    authUser.value = sessionUser
+    currentRole.value = sessionUser.roleId
+    syncFromSupabaseIfConfigured()
+  }
+  authReady.value = true
+
+  stopAuthListener = onAuthChange((user) => {
+    authUser.value = user
+    if (user) {
+      currentRole.value = user.roleId
+    }
+  })
+})
+
+onUnmounted(() => {
+  if (stopAuthListener) stopAuthListener()
 })
 
 watch(
-  [requests, projects, tasks, qaTests, actas, auditLogs, currentRole],
+  [requests, projects, tasks, qaTests, actas, auditLogs],
   () => {
     try {
       window.localStorage.setItem(
@@ -325,7 +435,6 @@ watch(
           qaTests: qaTests.value,
           actas: actas.value,
           auditLogs: auditLogs.value,
-          currentRole: currentRole.value,
         })
       )
     } catch {
@@ -346,11 +455,62 @@ function appendAuditLog(entity, recordId, action, previousState, newState, detai
     previousState,
     newState,
     detail,
-    user: roleDef.value.simulatedUser,
+    user: displayUserName.value,
     role: roleDef.value.label,
     timestamp: `Hoy · ${formattedTime} h`,
   }
   auditLogs.value = [newEntry, ...auditLogs.value]
+}
+
+function handleAuthenticated(user) {
+  authUser.value = user
+  currentRole.value = user.roleId
+  showAuthModal.value = false
+  view.value = 'inicio'
+  syncFromSupabaseIfConfigured()
+}
+
+function handleUserUpdated(updatedUser) {
+  authUser.value = updatedUser
+  currentRole.value = updatedUser.roleId
+}
+
+async function handleForcedPasswordChange() {
+  forcePassError.value = ''
+  if (forcePassForm.value.newPassword.length < 6) {
+    forcePassError.value = 'La nueva contraseña debe tener al menos 6 caracteres.'
+    return
+  }
+  if (forcePassForm.value.newPassword !== forcePassForm.value.confirmPassword) {
+    forcePassError.value = 'Las contraseñas no coinciden.'
+    return
+  }
+  savingForcePass.value = true
+  const { user, error } = await changeUserPassword(forcePassForm.value.newPassword)
+  savingForcePass.value = false
+  if (error) {
+    forcePassError.value = error
+    return
+  }
+  if (user) {
+    authUser.value = user
+    forcePassForm.value = { newPassword: '', confirmPassword: '' }
+    showFeedback('success', 'Contraseña personal actualizada. ¡Bienvenido/a!')
+  }
+}
+
+async function handleLogout() {
+  await logoutSession()
+  authUser.value = null
+  currentRole.value = 'comunidad'
+  view.value = 'inicio'
+  mobileNav.value = false
+  notification.value = false
+  modal.value = false
+  actaModal.value = false
+  qaModal.value = false
+  selectedProject.value = null
+  selectedCommission.value = null
 }
 
 function handleResetDemoData() {
@@ -371,15 +531,6 @@ function changeView(next) {
   filter.value = 'Todas'
   typeFilter.value = 'Todos'
   window.scrollTo({ top: 0, behavior: 'smooth' })
-}
-
-function handleRoleChange(nextRole) {
-  currentRole.value = nextRole
-  const nextDef = ROLES_COOPERATIVA.find((r) => r.id === nextRole)
-  showFeedback(
-    'success',
-    `Vista y permisos cambiados al rol simulado: ${nextDef?.label ?? nextRole}`
-  )
 }
 
 // Validación estricta del formulario de Solicitud (Punto 5)
@@ -422,7 +573,7 @@ function openNewRequestModal() {
   if (!roleDef.value.permissions.canCreateRequest) {
     showFeedback(
       'error',
-      `El rol actual (${roleDef.value.shortLabel}) es de consulta/fiscalización. Cambiá al rol "Solicitante externo" o "Consejo" para cargar solicitudes.`
+      `Tu rol actual (${roleDef.value.shortLabel}) es de consulta/fiscalización y no permite cargar solicitudes.`
     )
     return
   }
@@ -624,7 +775,9 @@ async function handleConvertRequestToProject(req) {
     status: 'Por comenzar',
     progress: 10,
     tone: tones[projects.value.length % tones.length] ?? 'mint',
-    initials: ['ML', 'SF', 'EV'],
+    lead: displayUserName.value,
+    leadInitials: displayUserInitials.value,
+    initials: [displayUserInitials.value],
     date: req.targetDate ? req.targetDate.slice(5) : '15 nov',
     commission: req.type === 'Formulario' ? 'Programación + Pruebas' : 'Programación + Diseño',
     hoursPc: 4,
@@ -673,13 +826,120 @@ async function handleUpdateProjectStage(proj, nextStage, nextProgress) {
     'CAMBIO DE ESTADO',
     `${oldStage} (${proj.progress}%)`,
     `${nextStage} (${nextProgress}%)`,
-    `Actualización de avance en '${proj.name}' por ${roleDef.value.simulatedUser}.`
+    `Actualización de avance en '${proj.name}' por ${displayUserName.value}.`
   )
   showFeedback('success', `Proyecto ${proj.id} actualizado a "${nextStage}" (${nextProgress}% completado).`)
 }
 
+const repoUrlDraft = ref('')
+const copiedRepo = ref(false)
+watch(selectedProject, (proj) => {
+  repoUrlDraft.value = proj?.repoUrl || ''
+  copiedRepo.value = false
+})
+
+async function handleCopyProjectRepo() {
+  const url = (repoUrlDraft.value || selectedProject.value?.repoUrl || '').trim()
+  if (!url) {
+    showFeedback('error', 'No hay un enlace de repositorio para copiar.')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(url)
+    copiedRepo.value = true
+    setTimeout(() => {
+      copiedRepo.value = false
+    }, 2000)
+    showFeedback('success', 'Enlace del repositorio copiado al portapapeles.')
+  } catch {
+    showFeedback('error', 'No se pudo copiar automáticamente al portapapeles.')
+  }
+}
+
+async function handleSaveProjectRepo(proj) {
+  if (!roleDef.value.permissions.canUpdateProjectStatus) return
+  const cleanUrl = repoUrlDraft.value.trim()
+  if (cleanUrl && !/^https?:\/\/.+/i.test(cleanUrl)) {
+    showFeedback('error', 'Ingresá una URL válida que empiece con https:// (ej. https://github.com/...).')
+    return
+  }
+  const oldUrl = proj.repoUrl || 'Sin repositorio'
+  const updated = { ...proj, repoUrl: cleanUrl }
+  projects.value = projects.value.map((p) => (p.id === proj.id ? updated : p))
+  selectedProject.value = updated
+  await updateProjectSupabase(proj.id, { repoUrl: cleanUrl })
+  appendAuditLog(
+    'Proyectos',
+    proj.id,
+    'ACTUALIZACIÓN REPOSITORIO',
+    oldUrl,
+    cleanUrl || 'Sin repositorio',
+    `Repositorio GitHub actualizado en '${proj.name}'.`
+  )
+  showFeedback('success', `Repositorio de ${proj.id} guardado correctamente.`)
+}
+
+function isProjectLead(proj) {
+  if (!proj || !authUser.value) return false
+  const userName = (authUser.value.fullName || '').trim().toLowerCase()
+  const userIni = (authUser.value.initials || '').trim().toUpperCase()
+  const projLead = (proj.lead || '').trim().toLowerCase()
+  const projIni = (proj.leadInitials || (Array.isArray(proj.initials) ? proj.initials[0] : '') || '')
+    .trim()
+    .toUpperCase()
+  return (projLead && userName === projLead) || (projIni && userIni === projIni)
+}
+
+const canAssignProjectMembers = computed(() => isProjectLead(selectedProject.value))
+
+function getMemberName(initials) {
+  const found = COOPERATIVE_MEMBERS.find((m) => m.initials === initials)
+  if (found) return `${found.name} (${found.commission})`
+  if (String(initials).startsWith('+')) return 'Más integrantes en la comisión'
+  return initials
+}
+
+function getPendingTasksForProject(projectId) {
+  return tasks.value.filter(
+    (t) => t.projectId === projectId && t.status !== 'Completada' && t.status !== 'Cancelada'
+  )
+}
+
+function getAllTasksForProject(projectId) {
+  return tasks.value.filter((t) => t.projectId === projectId)
+}
+
+async function handleToggleProjectMember(proj, member) {
+  if (!canAssignProjectMembers.value) return
+  const current = Array.isArray(proj.initials) ? [...proj.initials] : []
+  const exists = current.includes(member.initials)
+  const nextInitials = exists
+    ? current.filter((i) => i !== member.initials)
+    : [...current, member.initials]
+  if (nextInitials.length === 0) {
+    showFeedback('error', 'El proyecto debe tener al menos una persona asignada.')
+    return
+  }
+  const updated = { ...proj, initials: nextInitials }
+  projects.value = projects.value.map((p) => (p.id === proj.id ? updated : p))
+  selectedProject.value = updated
+  await updateProjectSupabase(proj.id, { initials: nextInitials })
+  appendAuditLog(
+    'Proyectos',
+    proj.id,
+    exists ? 'DESASIGNACIÓN EQUIPO' : 'ASIGNACIÓN EQUIPO',
+    current.join(', '),
+    nextInitials.join(', '),
+    `${exists ? 'Quitado' : 'Asignado'} ${member.name} (${member.initials}) en '${proj.name}'.`
+  )
+  showFeedback(
+    'success',
+    `${member.name} ${exists ? 'quitado/a de' : 'asignado/a a'} ${proj.id}.`
+  )
+}
+
 // Cambiar estado de una Tarea del Sprint Backlog
-function handleCycleTaskStatus(task) {
+async function handleChangeTaskStatus(task, nextStatus) {
   if (!roleDef.value.permissions.canManageTasks) {
     showFeedback(
       'error',
@@ -687,15 +947,15 @@ function handleCycleTaskStatus(task) {
     )
     return
   }
-  const order = ['Pendiente', 'En curso', 'En revisión QA', 'Completada']
-  const nextIdx = (order.indexOf(task.status) + 1) % order.length
-  const nextStatus = order[nextIdx] ?? 'En curso'
+  if (!nextStatus || nextStatus === task.status) return
+  const prevStatus = task.status
   tasks.value = tasks.value.map((t) => (t.id === task.id ? { ...t, status: nextStatus } : t))
+  await updateTaskSupabase(task.id, nextStatus)
   appendAuditLog(
     'Tareas',
     task.id,
     'CAMBIO DE ESTADO',
-    task.status,
+    prevStatus,
     nextStatus,
     `Tarea '${task.title}' (${task.projectId}) movida a '${nextStatus}'.`
   )
@@ -726,7 +986,7 @@ function handleCreateQATest() {
     casesExecuted: Number(qaForm.value.casesExecuted),
     bugsFound: Number(qaForm.value.bugsFound),
     status: qaForm.value.bugsFound > 0 ? 'Bug detectado' : 'Aprobado sin fallas',
-    reportedBy: roleDef.value.simulatedUser,
+    reportedBy: displayUserName.value,
     date: 'Hoy',
   }
   qaTests.value = [newQa, ...qaTests.value]
@@ -825,7 +1085,9 @@ const selectedCommissionObj = computed(() =>
 </script>
 
 <template>
-  <div class="app-shell">
+  <AuthView v-if="authReady && !authUser" @authenticated="handleAuthenticated" />
+
+  <div v-else-if="authUser" class="app-shell">
     <aside :class="['sidebar', mobileNav ? 'sidebar-open' : '']">
       <div
         class="brand"
@@ -844,11 +1106,12 @@ const selectedCommissionObj = computed(() =>
           cooperativa<span>digital</span>
         </span>
       </div>
+
       <div class="sidebar-rule" />
       <div class="workspace-label">ESPACIO DE TRABAJO</div>
       <nav class="nav-list" aria-label="Navegación principal">
         <Button
-          v-for="item in nav"
+          v-for="item in visibleNav"
           :key="item.id"
           variant="ghost"
           :class="['nav-item', view === item.id ? 'nav-item-active' : '']"
@@ -856,54 +1119,11 @@ const selectedCommissionObj = computed(() =>
         >
           <component :is="item.icon" :size="19" :stroke-width="1.8" />
           <span>{{ item.label }}</span>
-          <span v-if="item.id === 'solicitudes'" class="nav-count">
-            {{ requests.filter((r) => r.status === 'Por evaluar').length }}
+          <span v-if="item.id === 'solicitudes' && pendingRequestsCount > 0" class="nav-count">
+            {{ pendingRequestsCount }}
           </span>
         </Button>
       </nav>
-
-      <div class="sidebar-bottom">
-        <div class="sidebar-note">
-          <span class="note-icon">
-            <Sparkles :size="17" />
-          </span>
-          <strong>Rol Simulado Activo (Pto. 4):</strong>
-          <p style="margin-bottom: 8px">{{ roleDef.label }}</p>
-          <select
-            aria-label="Cambiar rol simulado"
-            :value="currentRole"
-            style="
-              width: 100%;
-              padding: 6px 8px;
-              border-radius: 5px;
-              font-size: 11px;
-              font-weight: 700;
-              background: var(--card);
-              color: var(--foreground);
-              border: 1px solid var(--border);
-            "
-            @change="handleRoleChange($event.target.value)"
-          >
-            <option v-for="r in ROLES_COOPERATIVA" :key="r.id" :value="r.id">
-              {{ r.shortLabel }} ({{ r.simulatedCode }})
-            </option>
-          </select>
-        </div>
-        <div
-          class="sidebar-user"
-          role="button"
-          tabindex="0"
-          title="Ver actas e historial de auditoría"
-          @click="changeView('asamblea')"
-        >
-          <span class="user-avatar">{{ roleDef.avatarInitials }}</span>
-          <span>
-            <strong>{{ roleDef.simulatedUser }}</strong>
-            <small>Rol simulado · {{ roleDef.shortLabel }}</small>
-          </span>
-          <MoreHorizontal :size="18" />
-        </div>
-      </div>
     </aside>
 
     <div class="main-shell">
@@ -921,61 +1141,14 @@ const selectedCommissionObj = computed(() =>
           </Button>
           <span class="breadcrumb">Cooperativa escolar</span>
           <ChevronRight :size="15" class="breadcrumb-chevron" />
-          <strong>{{ nav.find((n) => n.id === view)?.label }}</strong>
+          <strong>{{ view === 'perfil' ? 'Mi Perfil' : visibleNav.find((n) => n.id === view)?.label }}</strong>
         </div>
 
         <div class="topbar-actions">
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              gap: 6px;
-              background: var(--muted);
-              padding: 4px 10px;
-              border-radius: 6px;
-              border: 1px solid var(--border);
-              font-size: 11px;
-            "
-          >
-            <UserCheck :size="14" class="text-primary" />
-            <span style="color: var(--muted-foreground); font-weight: 600">Rol simulado:</span>
-            <select
-              aria-label="Selector de rol en barra superior"
-              :value="currentRole"
-              style="
-                background: transparent;
-                border: 0;
-                font-weight: 800;
-                color: var(--foreground);
-                outline: none;
-                cursor: pointer;
-              "
-              @change="handleRoleChange($event.target.value)"
-            >
-              <option v-for="r in ROLES_COOPERATIVA" :key="r.id" :value="r.id">
-                {{ r.shortLabel }}
-              </option>
-            </select>
-          </div>
-
-          <div
-            class="sample-label"
-            :style="{
-              background: isSupabaseConnected ? 'var(--mint-light)' : 'var(--sun-light)',
-              padding: '5px 10px',
-              borderRadius: '5px',
-              border: '1px solid var(--border)',
-              color: 'var(--foreground)',
-            }"
-            title="Estado de sincronización de datos"
-          >
-            <span
-              :style="{
-                background: isSupabaseConnected ? 'var(--primary)' : 'var(--coral)',
-              }"
-            />
-            {{ isSupabaseConnected ? 'CONECTADO A SUPABASE' : 'DATOS DE PRUEBA (SIMULADOS)' }}
-          </div>
+          <span class="status status-active" :title="isSupabaseConnected ? 'Conectado a Supabase PostgreSQL' : 'Datos de prueba locales'">
+            <span class="status-dot" />
+            {{ authUser ? `SESIÓN ACTIVA · ${roleDef.label.toUpperCase()}` : 'VISTA PÚBLICA · SIN SESIÓN' }}
+          </span>
 
           <Button
             variant="ghost"
@@ -983,14 +1156,70 @@ const selectedCommissionObj = computed(() =>
             aria-label="Notificaciones y Auditoría"
             title="Últimos eventos del historial"
             class="notification-button"
-            @click="notification = !notification"
+            @click="notification = !notification; accountMenuOpen = false"
           >
             <Bell :size="19" />
             <i />
           </Button>
-          <span class="topbar-avatar" :title="roleDef.simulatedUser">
-            {{ roleDef.avatarInitials }}
-          </span>
+
+          <!-- BOLITA DE CUENTA ARRIBA A LA DERECHA (DESPUÉS DE NOTIFICACIONES) -->
+          <div class="topbar-account-wrap">
+            <button
+              type="button"
+              :class="['topbar-avatar', 'topbar-account-ball', authUser?.avatarUrl ? 'has-avatar' : '']"
+              :title="authUser ? `${displayUserName} (${roleDef.shortLabel})` : 'Iniciar sesión'"
+              aria-label="Menú de cuenta"
+              @click="accountMenuOpen = !accountMenuOpen; notification = false"
+            >
+              <img
+                v-if="authUser?.avatarUrl"
+                :src="authUser.avatarUrl"
+                alt="Foto de perfil"
+                class="user-avatar-img"
+              />
+              <template v-else-if="authUser">{{ displayUserInitials }}</template>
+              <UserCheck v-else :size="16" />
+            </button>
+
+            <div v-if="accountMenuOpen" class="account-menu-popover">
+              <template v-if="authUser">
+                <div class="account-menu-head">
+                  <strong>{{ displayUserName }}</strong>
+                  <small>{{ roleDef.shortLabel }}</small>
+                </div>
+                <button
+                  type="button"
+                  class="account-menu-item"
+                  @click="changeView('perfil'); accountMenuOpen = false"
+                >
+                  <Edit3 :size="15" />
+                  <span>Editar datos y foto</span>
+                </button>
+                <button
+                  type="button"
+                  class="account-menu-item account-menu-danger"
+                  @click="accountMenuOpen = false; handleLogout()"
+                >
+                  <XCircle :size="15" />
+                  <span>Cerrar sesión</span>
+                </button>
+              </template>
+              <template v-else>
+                <div class="account-menu-head">
+                  <strong>Sin sesión activa</strong>
+                  <small>Vista pública</small>
+                </div>
+                <button
+                  type="button"
+                  class="account-menu-item"
+                  @click="accountMenuOpen = false; showAuthModal = true"
+                >
+                  <UserCheck :size="15" />
+                  <span>Iniciar sesión</span>
+                </button>
+              </template>
+            </div>
+          </div>
         </div>
 
         <div v-if="notification" class="notification-popover" style="width: 310px">
@@ -1071,50 +1300,6 @@ const selectedCommissionObj = computed(() =>
           </Button>
         </div>
 
-        <div
-          style="
-            margin-bottom: 22px;
-            padding: 10px 16px;
-            border-radius: 7px;
-            background: var(--card);
-            border: 1px solid var(--border);
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            font-size: 11px;
-          "
-        >
-          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
-            <span class="status status-active">
-              <span class="status-dot" />
-              ROL SIMULADO: {{ roleDef.label.toUpperCase() }}
-            </span>
-            <span style="color: var(--muted-foreground)">
-              Usuario: <strong>{{ roleDef.simulatedUser }}</strong> · {{ roleDef.canDo[0] }}
-            </span>
-          </div>
-          <div style="display: flex; align-items: center; gap: 10px">
-            <span style="color: var(--muted-foreground)">
-              Fuente:
-              <strong>{{
-                isSupabaseConnected ? 'Supabase PostgreSQL' : 'Datos de prueba ficticios'
-              }}</strong>
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              style="height: 28px; font-size: 11px"
-              title="Restaurar datos de prueba iniciales del informe"
-              @click="handleResetDemoData"
-            >
-              <RotateCcw :size="13" />
-              <span>Restaurar datos</span>
-            </Button>
-          </div>
-        </div>
-
         <div class="page-heading">
           <div>
             <p class="eyebrow">{{ titles[view].eyebrow }}</p>
@@ -1122,7 +1307,15 @@ const selectedCommissionObj = computed(() =>
             <p class="page-subtitle">{{ titles[view].subtitle }}</p>
           </div>
           <Button
-            v-if="view !== 'asamblea' && view !== 'comisiones' && view !== 'tablero'"
+            v-if="
+              roleDef.permissions.canCreateRequest &&
+              view !== 'asamblea' &&
+              view !== 'comisiones' &&
+              view !== 'tablero' &&
+              view !== 'perfil' &&
+              view !== 'usuarios' &&
+              view !== 'informe'
+            "
             class="primary-action"
             @click="openNewRequestModal"
           >
@@ -1241,14 +1434,15 @@ const selectedCommissionObj = computed(() =>
               </span>
               <div>
                 <strong>
-                  {{
-                    requests
-                      .filter((r) => r.status === 'Por evaluar')
-                      .length.toString()
-                      .padStart(2, '0')
-                  }}
+                  {{ pendingRequestsCount.toString().padStart(2, '0') }}
                 </strong>
-                <span>Solicitudes por evaluar</span>
+                <span>
+                  {{
+                    pendingRequestsCount > 0
+                      ? 'Solicitudes por evaluar'
+                      : 'Sin solicitudes pendientes'
+                  }}
+                </span>
               </div>
               <ArrowUpRight :size="17" class="metric-arrow" />
             </div>
@@ -1394,25 +1588,17 @@ const selectedCommissionObj = computed(() =>
               </Button>
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
-              <select
+              <CustomSelect
                 v-model="typeFilter"
-                aria-label="Filtrar por tipo de solución"
-                style="
-                  height: 36px;
-                  padding: 0 10px;
-                  border-radius: 5px;
-                  border: 1px solid var(--border);
-                  background: var(--card);
-                  font-size: 11px;
-                  font-weight: 600;
-                "
-              >
-                <option value="Todos">Todos los tipos</option>
-                <option value="Sitio web">Sitio web</option>
-                <option value="Formulario">Formulario</option>
-                <option value="Aplicación informativa">Aplicación informativa</option>
-                <option value="Herramienta">Herramienta</option>
-              </select>
+                :options="[
+                  { value: 'Todos', label: 'Todos los tipos' },
+                  { value: 'Sitio web', label: 'Sitio web' },
+                  { value: 'Formulario', label: 'Formulario' },
+                  { value: 'Aplicación informativa', label: 'Aplicación informativa' },
+                  { value: 'Herramienta', label: 'Herramienta' },
+                ]"
+                style="min-width: 175px"
+              />
               <div class="search-field">
                 <Search :size="17" />
                 <input
@@ -1433,7 +1619,9 @@ const selectedCommissionObj = computed(() =>
                   <th>TIPO</th>
                   <th>ESTADO</th>
                   <th>FECHA / PRIORIDAD</th>
-                  <th>OPERACIONES (SEGÚN ROL: {{ roleDef.shortLabel.toUpperCase() }})</th>
+                  <th v-if="roleDef.permissions.canEvaluateRequest || roleDef.permissions.canEditOwnRequest">
+                    OPERACIONES
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -1476,7 +1664,7 @@ const selectedCommissionObj = computed(() =>
                       Meta: {{ r.targetDate || 'A definir' }} ({{ r.priority }})
                     </small>
                   </td>
-                  <td>
+                  <td v-if="roleDef.permissions.canEvaluateRequest || roleDef.permissions.canEditOwnRequest">
                     <div style="display: flex; flex-wrap: wrap; gap: 6px">
                       <Button
                         v-if="roleDef.permissions.canEvaluateRequest && r.status === 'Por evaluar'"
@@ -1544,16 +1732,6 @@ const selectedCommissionObj = computed(() =>
                       >
                         <XCircle :size="12" /> Cancelar
                       </Button>
-
-                      <span
-                        v-if="
-                          !roleDef.permissions.canEvaluateRequest &&
-                          !roleDef.permissions.canEditOwnRequest
-                        "
-                        style="font-size: 10px; color: var(--muted-foreground)"
-                      >
-                        Solo lectura ({{ roleDef.shortLabel }})
-                      </span>
                     </div>
                   </td>
                 </tr>
@@ -1633,8 +1811,8 @@ const selectedCommissionObj = computed(() =>
                 <Button
                   variant="ghost"
                   size="icon"
-                  title="Vista de tablero Kanban"
-                  aria-label="Vista de tablero Kanban"
+                  title="Vista de lista"
+                  aria-label="Vista de lista"
                   :class="board ? 'switch-active' : ''"
                   @click="board = true"
                 >
@@ -1644,45 +1822,46 @@ const selectedCommissionObj = computed(() =>
             </div>
           </div>
 
-          <div v-if="board" class="kanban">
-            <div
-              v-for="stage in ['Por comenzar', 'En desarrollo', 'En pruebas', 'Finalizado']"
-              :key="stage"
-              class="kanban-column"
-            >
-              <div class="kanban-heading">
-                <span
-                  :class="['kanban-dot', `stage-${stage.replaceAll(' ', '-').toLowerCase()}`]"
-                />
-                <strong>{{ stage }}</strong>
-                <small>{{ visibleProjects.filter((p) => p.status === stage).length }}</small>
-              </div>
-              <div
-                v-for="p in visibleProjects.filter((item) => item.status === stage)"
-                :key="p.id"
-                class="kanban-card"
-                role="button"
-                tabindex="0"
-                @click="selectedProject = p"
-                @keydown.enter="selectedProject = p"
-              >
-                <span class="row-id">{{ p.id }} · DATO DE PRUEBA</span>
-                <strong>{{ p.name }}</strong>
-                <p>{{ p.description }}</p>
-                <div>
-                  <div class="avatar-stack avatar-stack-small">
-                    <span
-                      v-for="(ini, i) in p.initials"
-                      :key="`${ini}-${i}`"
-                      :class="['avatar', `avatar-${i % 4}`]"
-                    >
-                      {{ ini }}
+          <div v-if="board" class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Proyecto</th>
+                  <th>Categoría</th>
+                  <th>Comisión</th>
+                  <th>Progreso</th>
+                  <th>Estado</th>
+                  <th>Entrega</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="p in visibleProjects"
+                  :key="p.id"
+                  style="cursor: pointer"
+                  @click="selectedProject = p"
+                >
+                  <td class="row-id">{{ p.id }}</td>
+                  <td>
+                    <strong>{{ p.name }}</strong>
+                    <div style="font-size: 0.8rem; color: var(--muted-foreground)">
+                      {{ p.description }}
+                    </div>
+                  </td>
+                  <td>{{ p.category }}</td>
+                  <td>{{ p.commission }}</td>
+                  <td><strong>{{ p.progress }}%</strong></td>
+                  <td>
+                    <span :class="['status', `status-${getStatusKind(p.status)}`]">
+                      <span class="status-dot" />
+                      {{ p.status }}
                     </span>
-                  </div>
-                  <ArrowUpRight :size="16" />
-                </div>
-              </div>
-            </div>
+                  </td>
+                  <td>{{ p.date }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <div v-else class="project-grid">
@@ -1710,6 +1889,36 @@ const selectedCommissionObj = computed(() =>
                 </div>
                 <h3>{{ p.name }}</h3>
                 <p>{{ p.description }}</p>
+                <div style="font-size: 11px; color: var(--foreground); margin-bottom: 10px">
+                  <strong>Responsable:</strong> {{ p.lead || getMemberName(p.initials?.[0]) }}
+                </div>
+                <div
+                  v-if="roleDef.permissions.canViewInternalBoards"
+                  class="card-pending-tasks"
+                  @click.stop
+                >
+                  <div class="card-pending-head">
+                    <span>Tareas pendientes</span>
+                    <strong>{{ getPendingTasksForProject(p.id).length }}</strong>
+                  </div>
+                  <ul v-if="getPendingTasksForProject(p.id).length > 0" class="card-pending-list">
+                    <li
+                      v-for="pt in getPendingTasksForProject(p.id).slice(0, 2)"
+                      :key="pt.id"
+                    >
+                      <span :title="pt.title">{{ pt.title }}</span>
+                      <CustomSelect
+                        v-if="roleDef.permissions.canManageTasks"
+                        :model-value="pt.status"
+                        :options="['Pendiente', 'En curso', 'En revisión QA', 'Completada']"
+                        class="cselect-compact"
+                        @update:model-value="(val) => handleChangeTaskStatus(pt, val)"
+                      />
+                      <small v-else>{{ pt.status }}</small>
+                    </li>
+                  </ul>
+                  <p v-else class="card-pending-empty">Sin tareas pendientes</p>
+                </div>
                 <div class="progress-label">
                   <span>Progreso ({{ p.commission }})</span>
                   <strong>{{ p.progress }}%</strong>
@@ -1722,7 +1931,9 @@ const selectedCommissionObj = computed(() =>
                     <span
                       v-for="(ini, i) in p.initials"
                       :key="`${ini}-${i}`"
-                      :class="['avatar', `avatar-${i % 4}`]"
+                      :class="['avatar', 'avatar-tooltip', `avatar-${i % 4}`]"
+                      :data-tooltip="getMemberName(ini)"
+                      :title="getMemberName(ini)"
                     >
                       {{ ini }}
                     </span>
@@ -1744,7 +1955,7 @@ const selectedCommissionObj = computed(() =>
             v-if="roleDef.permissions.canViewInternalBoards"
             style="margin-top: 32px; display: grid; gap: 24px"
           >
-            <div class="table-wrap">
+            <div v-if="board" class="table-wrap">
               <div
                 style="
                   padding: 16px 20px;
@@ -1761,8 +1972,7 @@ const selectedCommissionObj = computed(() =>
                     Tablero de Tareas Pendientes por Comisión (Sprint Backlog - Art. 10 inc. b)
                   </strong>
                   <p style="font-size: 11px; color: var(--muted-foreground); margin: 3px 0 0">
-                    Los referentes y socios pueden hacer clic en «Avanzar estado» para registrar el
-                    progreso de su tarea.
+                    Cambiá el estado de cada tarea directamente desde el desplegable.
                   </p>
                 </div>
               </div>
@@ -1774,7 +1984,6 @@ const selectedCommissionObj = computed(() =>
                     <th>COMISIÓN</th>
                     <th>RESPONSABLE</th>
                     <th>ESTADO</th>
-                    <th>ACCIÓN</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1787,22 +1996,17 @@ const selectedCommissionObj = computed(() =>
                     <td>{{ t.commission }}</td>
                     <td>{{ t.assignee }}</td>
                     <td>
-                      <span :class="['status', `status-${getStatusKind(t.status)}`]">
+                      <CustomSelect
+                        v-if="roleDef.permissions.canManageTasks"
+                        :model-value="t.status"
+                        :options="['Pendiente', 'En curso', 'En revisión QA', 'Completada']"
+                        class="cselect-compact"
+                        @update:model-value="(val) => handleChangeTaskStatus(t, val)"
+                      />
+                      <span v-else :class="['status', `status-${getStatusKind(t.status)}`]">
                         <span class="status-dot" />
                         {{ t.status }}
                       </span>
-                    </td>
-                    <td>
-                      <Button
-                        v-if="roleDef.permissions.canManageTasks"
-                        size="sm"
-                        variant="outline"
-                        style="height: 27px; font-size: 10px"
-                        @click="handleCycleTaskStatus(t)"
-                      >
-                        Avanzar estado
-                      </Button>
-                      <span v-else style="font-size: 10px">Solo lectura</span>
                     </td>
                   </tr>
                 </tbody>
@@ -1910,7 +2114,9 @@ const selectedCommissionObj = computed(() =>
                   <span
                     v-for="(ini, idx) in c.initials"
                     :key="`${ini}-${idx}`"
-                    :class="['avatar', `avatar-${idx % 4}`]"
+                    :class="['avatar', 'avatar-tooltip', `avatar-${idx % 4}`]"
+                    :data-tooltip="getMemberName(ini)"
+                    :title="getMemberName(ini)"
                   >
                     {{ ini }}
                   </span>
@@ -2103,6 +2309,52 @@ const selectedCommissionObj = computed(() =>
         <template v-if="view === 'tablero'">
           <KPITrackingDashboard
             :onNavigateToProjects="() => changeView('proyectos')"
+            :onRefreshData="syncFromSupabaseIfConfigured"
+            :lastUpdated="lastSyncTimestamp"
+            :isLoading="isLoadingOp"
+            :loadError="syncError"
+            :isSupabaseConnected="isSupabaseConnected"
+          />
+        </template>
+
+        <!-- ===============================================================
+             VISTA 7: INFORME DE SEGUIMIENTO PERIÓDICO
+        =============================================================== -->
+        <template v-if="view === 'informe'">
+          <FollowUpReportView
+            :isSupabaseConnected="isSupabaseConnected"
+            :lastUpdated="lastSyncTimestamp"
+            :currentRoleLabel="roleDef.label"
+            :totalRequests="requests.length"
+            :totalProjects="projects.length"
+          />
+        </template>
+
+        <!-- ===============================================================
+             VISTA 8: MI CUENTA Y PERFIL PERSONAL
+        =============================================================== -->
+        <template v-if="view === 'perfil' && authUser">
+          <UserProfileView
+            mode="profile"
+            :auth-user="authUser"
+            :role-label="roleDef.label"
+            @user-updated="handleUserUpdated"
+            @logout="handleLogout"
+            @open-login="handleLogout"
+          />
+        </template>
+
+        <!-- ===============================================================
+             VISTA 9: USUARIOS Y ROLES (SOLO CONSEJO / ADMIN)
+        =============================================================== -->
+        <template v-if="view === 'usuarios' && authUser && canManageUserAccounts(authUser.roleId)">
+          <UserProfileView
+            mode="admin"
+            :auth-user="authUser"
+            :role-label="roleDef.label"
+            @user-updated="handleUserUpdated"
+            @logout="handleLogout"
+            @open-login="handleLogout"
           />
         </template>
 
@@ -2169,21 +2421,15 @@ const selectedCommissionObj = computed(() =>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
             <label>
               Tipo de solución permitida *
-              <select v-model="form.type">
-                <option value="Sitio web">Sitio web</option>
-                <option value="Formulario">Formulario</option>
-                <option value="Aplicación informativa">Aplicación informativa</option>
-                <option value="Herramienta">Herramienta</option>
-              </select>
+              <CustomSelect
+                v-model="form.type"
+                :options="['Sitio web', 'Formulario', 'Aplicación informativa', 'Herramienta']"
+              />
             </label>
 
             <label>
               Fecha necesaria / límite *
-              <input
-                v-model="form.targetDate"
-                type="date"
-                :style="formErrors.targetDate ? { borderColor: 'var(--destructive)' } : undefined"
-              />
+              <CustomDatePicker v-model="form.targetDate" />
               <small
                 v-if="formErrors.targetDate"
                 style="color: var(--destructive); font-weight: 600"
@@ -2266,7 +2512,7 @@ const selectedCommissionObj = computed(() =>
     ===================================================================== -->
     <div v-if="selectedProject" class="overlay" @mousedown.self="selectedProject = null">
       <div
-        class="detail-dialog"
+        :class="['detail-dialog', canAssignProjectMembers ? 'detail-dialog-wide' : 'detail-dialog-single']"
         role="dialog"
         aria-modal="true"
         aria-labelledby="project-title"
@@ -2283,7 +2529,8 @@ const selectedCommissionObj = computed(() =>
         <div :class="['detail-art', `tone-${selectedProject.tone}`]">
           <ProjectGlyph :tone="selectedProject.tone" />
         </div>
-        <div class="detail-body">
+        <div :class="['detail-body', canAssignProjectMembers ? 'detail-split' : 'detail-stack']">
+          <div class="detail-col-left">
           <span class="eyebrow">
             {{ selectedProject.id }} · {{ selectedProject.category }} · DATO DE PRUEBA
           </span>
@@ -2295,20 +2542,98 @@ const selectedCommissionObj = computed(() =>
           <p>{{ selectedProject.description }}</p>
           <div class="detail-facts">
             <div>
+              <span>Responsable</span>
+              <strong>{{ selectedProject.lead || getMemberName(selectedProject.initials?.[0]) }}</strong>
+            </div>
+            <div>
               <span>Comisiones</span>
               <strong>{{ selectedProject.commission }}</strong>
             </div>
             <div>
-              <span>Fecha estimada</span>
-              <strong>{{ selectedProject.date }}</strong>
-            </div>
-            <div>
-              <span>Avance</span>
-              <strong>{{ selectedProject.progress }}%</strong>
+              <span>Fecha / Avance</span>
+              <strong>{{ selectedProject.date }} · {{ selectedProject.progress }}%</strong>
             </div>
           </div>
           <div class="progress-track">
             <span :style="{ width: `${selectedProject.progress}%` }" />
+          </div>
+
+          <!-- ENLACE A REPOSITORIO GITHUB DEL PROYECTO -->
+          <div
+            style="
+              margin-top: 16px;
+              padding: 12px 14px;
+              border-radius: 8px;
+              background: #f8fafc;
+              border: 1px solid var(--border);
+              display: grid;
+              gap: 8px;
+            "
+          >
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap">
+              <strong style="font-size: 12px">Repositorio de código (GitHub)</strong>
+              <a
+                v-if="selectedProject.repoUrl"
+                :href="selectedProject.repoUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 4px;
+                  font-size: 12px;
+                  font-weight: 700;
+                  color: var(--primary);
+                  text-decoration: underline;
+                "
+              >
+                <span>Abrir repositorio</span>
+                <ArrowUpRight :size="14" />
+              </a>
+              <span v-else style="font-size: 11px; color: var(--muted-foreground)">
+                Sin repositorio vinculado todavía
+              </span>
+            </div>
+
+            <div
+              v-if="roleDef.permissions.canUpdateProjectStatus"
+              style="display: flex; gap: 8px; align-items: center"
+            >
+              <input
+                v-model="repoUrlDraft"
+                type="url"
+                placeholder="https://github.com/usuario/repositorio"
+                style="
+                  flex: 1;
+                  height: 34px;
+                  padding: 0 10px;
+                  border: 1px solid var(--input);
+                  border-radius: 6px;
+                  font-size: 12px;
+                  background: #ffffff;
+                "
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                title="Copiar enlace"
+                aria-label="Copiar enlace del repositorio"
+                @click="handleCopyProjectRepo"
+              >
+                <Check v-if="copiedRepo" :size="15" />
+                <Copy v-else :size="15" />
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                title="Guardar enlace"
+                aria-label="Guardar enlace del repositorio"
+                @click="handleSaveProjectRepo(selectedProject)"
+              >
+                <Save :size="15" />
+              </Button>
+            </div>
           </div>
 
           <div
@@ -2359,22 +2684,90 @@ const selectedCommissionObj = computed(() =>
               </Button>
             </div>
           </div>
-          <p v-else style="font-size: 11px; color: var(--muted-foreground); margin-top: 14px">
-            Vista de lectura para {{ roleDef.shortLabel }}. Los cambios de estado los realizan
-            Referentes, Socios de la comisión y el Consejo.
-          </p>
+          </div>
 
-          <div class="detail-team">
+          <div class="detail-col-right">
+          <div class="detail-team" style="margin-top: 0">
             <div class="avatar-stack">
               <span
                 v-for="(ini, idx) in selectedProject.initials"
                 :key="`${ini}-${idx}`"
-                :class="['avatar', `avatar-${idx % 4}`]"
+                :class="['avatar', 'avatar-tooltip', `avatar-${idx % 4}`]"
+                :data-tooltip="getMemberName(ini)"
+                :title="getMemberName(ini)"
               >
                 {{ ini }}
               </span>
             </div>
             <span>Equipo asignado al proyecto</span>
+          </div>
+
+          <div
+            v-if="roleDef.permissions.canViewInternalBoards"
+            style="
+              margin-top: 14px;
+              padding: 12px 14px;
+              border-radius: 8px;
+              background: #f8fafc;
+              border: 1px solid var(--border);
+            "
+          >
+            <strong style="font-size: 11px; display: block; margin-bottom: 8px">
+              Tareas del proyecto (Pendientes: {{ getPendingTasksForProject(selectedProject.id).length }})
+            </strong>
+            <ul
+              v-if="getAllTasksForProject(selectedProject.id).length > 0"
+              class="card-pending-list"
+            >
+              <li
+                v-for="pt in getAllTasksForProject(selectedProject.id)"
+                :key="pt.id"
+              >
+                <span :title="pt.title">{{ pt.title }} <small style="color: var(--muted-foreground)">· {{ pt.assignee }}</small></span>
+                <CustomSelect
+                  v-if="roleDef.permissions.canManageTasks"
+                  :model-value="pt.status"
+                  :options="['Pendiente', 'En curso', 'En revisión QA', 'Completada']"
+                  class="cselect-compact"
+                  @update:model-value="(val) => handleChangeTaskStatus(pt, val)"
+                />
+                <small v-else>{{ pt.status }}</small>
+              </li>
+            </ul>
+            <p v-else class="card-pending-empty">Sin tareas registradas en este proyecto</p>
+          </div>
+
+          <!-- ASIGNAR PERSONAS AL PROYECTO (SOLO CONSEJO / REFERENTES) -->
+          <div
+            v-if="canAssignProjectMembers"
+            style="
+              margin-top: 14px;
+              padding: 14px;
+              border-radius: 8px;
+              background: #f8fafc;
+              border: 1px solid var(--border);
+            "
+          >
+            <strong style="font-size: 11px; display: block; margin-bottom: 10px">
+              Asignar o quitar integrantes del proyecto:
+            </strong>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px">
+              <button
+                v-for="m in COOPERATIVE_MEMBERS"
+                :key="m.initials"
+                type="button"
+                :class="[
+                  'member-assign-chip',
+                  selectedProject.initials.includes(m.initials) ? 'member-assign-active' : '',
+                ]"
+                :title="`${m.name} · ${m.commission}`"
+                @click="handleToggleProjectMember(selectedProject, m)"
+              >
+                <span class="member-chip-ini">{{ m.initials }}</span>
+                <span>{{ m.name }}</span>
+              </button>
+            </div>
+          </div>
           </div>
         </div>
       </div>
@@ -2423,7 +2816,9 @@ const selectedCommissionObj = computed(() =>
               <span
                 v-for="(ini, idx) in selectedCommissionObj.initials"
                 :key="`${ini}-${idx}`"
-                :class="['avatar', `avatar-${idx % 4}`]"
+                :class="['avatar', 'avatar-tooltip', `avatar-${idx % 4}`]"
+                :data-tooltip="getMemberName(ini)"
+                :title="getMemberName(ini)"
               >
                 {{ ini }}
               </span>
@@ -2519,21 +2914,23 @@ const selectedCommissionObj = computed(() =>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
             <label>
               Proyecto evaluado *
-              <select v-model="qaForm.projectId">
-                <option v-for="p in projects" :key="p.id" :value="p.id">
-                  {{ p.id }} · {{ p.name }}
-                </option>
-              </select>
+              <CustomSelect
+                v-model="qaForm.projectId"
+                :options="projects.map((p) => ({ value: p.id, label: `${p.id} · ${p.name}` }))"
+              />
             </label>
             <label>
               Tipo de prueba *
-              <select v-model="qaForm.type">
-                <option value="Validación de campos">Validación de campos</option>
-                <option value="Diseño responsivo">Diseño responsivo</option>
-                <option value="Enlaces y navegación">Enlaces y navegación</option>
-                <option value="Accesibilidad y textos">Accesibilidad y textos</option>
-                <option value="Rendimiento en PC de sala">Rendimiento en PC de sala</option>
-              </select>
+              <CustomSelect
+                v-model="qaForm.type"
+                :options="[
+                  'Validación de campos',
+                  'Diseño responsivo',
+                  'Enlaces y navegación',
+                  'Accesibilidad y textos',
+                  'Rendimiento en PC de sala',
+                ]"
+              />
             </label>
           </div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
@@ -2573,6 +2970,55 @@ const selectedCommissionObj = computed(() =>
               Cancelar
             </Button>
             <Button type="submit">Guardar Reporte QA</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL OBLIGATORIO DE CAMBIO DE CONTRASEÑA EN PRIMER INGRESO -->
+    <div v-if="authUser?.mustChangePassword" class="overlay">
+      <div class="dialog" role="dialog" aria-modal="true">
+        <div class="dialog-head">
+          <div>
+            <span class="eyebrow">PRIMER INGRESO · SEGURIDAD OBLIGATORIA</span>
+            <h2>Cambiá tu contraseña inicial</h2>
+          </div>
+        </div>
+        <p>
+          Tu cuenta fue creada por el Consejo de Administración con una contraseña inicial sencilla.
+          Por seguridad, debés elegir una nueva contraseña personal antes de continuar.
+        </p>
+        <form @submit.prevent="handleForcedPasswordChange">
+          <label>
+            Nueva contraseña * (mínimo 6 caracteres)
+            <input
+              v-model="forcePassForm.newPassword"
+              type="password"
+              minlength="6"
+              placeholder="Ingresá tu nueva contraseña"
+              required
+            />
+          </label>
+          <label>
+            Confirmar nueva contraseña *
+            <input
+              v-model="forcePassForm.confirmPassword"
+              type="password"
+              minlength="6"
+              placeholder="Repetí tu nueva contraseña"
+              required
+            />
+          </label>
+          <small v-if="forcePassError" style="color: var(--destructive); font-weight: 700">
+            {{ forcePassError }}
+          </small>
+          <div class="dialog-actions">
+            <Button type="button" variant="outline" @click="handleLogout">
+              Cerrar sesión
+            </Button>
+            <Button type="submit" :disabled="savingForcePass">
+              {{ savingForcePass ? 'Guardando...' : 'Guardar nueva contraseña' }}
+            </Button>
           </div>
         </form>
       </div>

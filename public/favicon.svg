@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0d2b2d"/>
+  <g transform="rotate(-10 32 32)">
+    <!-- Arriba izquierda: menta -->
+    <rect x="13" y="13" width="17" height="17" rx="3" fill="#6dd4b1"/>
+    <!-- Arriba derecha: coral con esquina superior derecha redondeada -->
+    <path d="M37 13 H39 A12 12 0 0 1 51 25 V27 A3 3 0 0 1 48 30 H37 A3 3 0 0 1 34 27 V16 A3 3 0 0 1 37 13 Z" fill="#f58465"/>
+    <!-- Abajo izquierda: amarillo con esquina inferior izquierda redondeada -->
+    <path d="M16 34 H27 A3 3 0 0 1 30 37 V48 A3 3 0 0 1 27 51 H25 A12 12 0 0 1 13 39 V37 A3 3 0 0 1 16 34 Z" fill="#f6c967"/>
+    <!-- Abajo derecha: menta -->
+    <rect x="34" y="34" width="17" height="17" rx="3" fill="#6dd4b1"/>
+  </g>
+</svg>

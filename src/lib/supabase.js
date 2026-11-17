@@ -145,6 +145,7 @@ export async function fetchAllFromSupabase() {
       hoursPc: Number(p.horas_pc_asignadas ?? 14),
       bugsCount: Number(p.bugs_detectados ?? 0),
       testCasesCount: Number(p.casos_prueba_ejecutados ?? 20),
+      repoUrl: p.repositorio_url ? String(p.repositorio_url) : '',
     }))
 
     const tareas = (tarRes.data || []).map((t) => ({
@@ -282,6 +283,7 @@ export async function insertProjectSupabase(newProj) {
         iniciales_equipo: newProj.initials || ['ML', 'SF', 'EV'],
         fecha_estimada_etiqueta: newProj.date || '15 nov',
         horas_pc_asignadas: newProj.hoursPc ?? 4,
+        repositorio_url: newProj.repoUrl || null,
       },
     ])
     .select()
@@ -289,14 +291,27 @@ export async function insertProjectSupabase(newProj) {
   return { savedInSupabase: !error, data, error: error?.message }
 }
 
-export async function updateProjectSupabase(id, { status, progress }) {
+export async function updateProjectSupabase(id, { status, progress, repoUrl, initials }) {
   const client = getSupabaseClient()
   if (!client) return { savedInSupabase: false }
 
   const payload = {}
   if (status) payload.estado = status
   if (progress !== undefined) payload.progreso = progress
+  if (repoUrl !== undefined) payload.repositorio_url = repoUrl || null
+  if (Array.isArray(initials)) payload.iniciales_equipo = initials
 
   const { error } = await client.from('proyectos').update(payload).eq('id', id)
+  return { savedInSupabase: !error, error: error?.message }
+}
+
+export async function updateTaskSupabase(id, status) {
+  const client = getSupabaseClient()
+  if (!client) return { savedInSupabase: false }
+
+  const { error } = await client
+    .from('tareas_proyecto')
+    .update({ estado: status })
+    .eq('id', id)
   return { savedInSupabase: !error, error: error?.message }
 }
